@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 
 use pulse_store::branch_store::BranchStore;
 use pulse_store::graph_store::GraphStore;
+use pulse_store::profile_store::ProfileStore;
 use pulse_store::stub_store::StubStore;
 use pulse_stub::format::{BranchVector, Stub};
 use pulse_stub::signing::verify_stub_signature;
@@ -49,6 +50,8 @@ pub enum NodeCommand {
     PublishStub(Stub),
     /// Publish an edge update.
     PublishEdge(String),
+    /// Publish a profile update.
+    PublishProfile(String),
     /// Request a stub from the network by content hash.
     RequestStub([u8; 32]),
     /// Dial a peer.
@@ -71,6 +74,7 @@ pub struct NodeConfig {
     pub stub_store: Option<Arc<StubStore>>,
     pub graph_store: Option<Arc<GraphStore>>,
     pub branch_store: Option<Arc<BranchStore>>,
+    pub profile_store: Option<Arc<ProfileStore>>,
 }
 
 /// A running Pulse P2P node.
@@ -143,6 +147,11 @@ impl PulseNode {
             None => Arc::new(BranchStore::open(&config.data_dir.join("branches.db"))?),
         };
 
+        let profile_store = match config.profile_store {
+            Some(s) => s,
+            None => Arc::new(ProfileStore::open(&config.data_dir.join("profiles.db"))?),
+        };
+
         // Channels
         let (command_tx, command_rx) = mpsc::channel(256);
         let (event_tx, event_rx) = mpsc::channel(256);
@@ -155,6 +164,7 @@ impl PulseNode {
             stub_store,
             graph_store,
             branch_store,
+            profile_store,
             config.bootstrap_peers,
             stubs_topic,
             edges_topic,
@@ -175,6 +185,11 @@ impl PulseNode {
     /// Publish an edge update.
     pub async fn publish_edge(&self, edge_json: String) -> Result<(), mpsc::error::SendError<NodeCommand>> {
         self.command_tx.send(NodeCommand::PublishEdge(edge_json)).await
+    }
+
+    /// Publish a profile update.
+    pub async fn publish_profile(&self, profile_json: String) -> Result<(), mpsc::error::SendError<NodeCommand>> {
+        self.command_tx.send(NodeCommand::PublishProfile(profile_json)).await
     }
 
     /// Dial a peer.
@@ -202,6 +217,7 @@ async fn event_loop(
     stub_store: Arc<StubStore>,
     graph_store: Arc<GraphStore>,
     branch_store: Arc<BranchStore>,
+    profile_store: Arc<ProfileStore>,
     bootstrap_peers: Vec<Multiaddr>,
     stubs_topic: IdentTopic,
     edges_topic: IdentTopic,
@@ -241,6 +257,7 @@ async fn event_loop(
                     &stub_store,
                     &graph_store,
                     &branch_store,
+                    &profile_store,
                     &stubs_topic,
                     &edges_topic,
                 ).await;
@@ -263,6 +280,15 @@ async fn event_loop(
                             msg.serialize(),
                         ) {
                             warn!("Failed to publish edge: {e}");
+                        }
+                    }
+                    Some(NodeCommand::PublishProfile(profile_json)) => {
+                        let msg = PulseMessage::ProfileUpdate { profile_json };
+                        if let Err(e) = swarm.behaviour_mut().gossipsub.publish(
+                            stubs_topic.clone(),
+                            msg.serialize(),
+                        ) {
+                            warn!("Failed to publish profile: {e}");
                         }
                     }
                     Some(NodeCommand::Dial(addr)) => {
@@ -300,6 +326,7 @@ async fn handle_swarm_event(
     stub_store: &Arc<StubStore>,
     graph_store: &Arc<GraphStore>,
     branch_store: &Arc<BranchStore>,
+    profile_store: &Arc<ProfileStore>,
     stubs_topic: &IdentTopic,
     edges_topic: &IdentTopic,
 ) {
@@ -345,6 +372,15 @@ async fn handle_swarm_event(
                 }
             }
 
+            // Republish profiles
+            if let Ok(profiles) = profile_store.get_all_profiles() {
+                for meta in &profiles {
+                    let profile_json = serde_json::to_string(meta).unwrap_or_default();
+                    let msg = PulseMessage::ProfileUpdate { profile_json };
+                    let _ = gossipsub.publish(stubs_topic_clone.clone(), msg.serialize());
+                }
+            }
+
             if republished > 0 {
                 info!("Republished {republished} stubs to new peer {peer_id}");
             }
@@ -357,7 +393,7 @@ async fn handle_swarm_event(
             gossipsub::Event::Message { message, .. },
         )) => {
             handle_gossip_message(
-                &message, event_tx, stub_store, graph_store, branch_store,
+                &message, event_tx, stub_store, graph_store, branch_store, profile_store,
             )
             .await;
         }
@@ -388,6 +424,7 @@ async fn handle_gossip_message(
     stub_store: &Arc<StubStore>,
     graph_store: &Arc<GraphStore>,
     branch_store: &Arc<BranchStore>,
+    profile_store: &Arc<ProfileStore>,
 ) {
     let msg = match PulseMessage::deserialize(&message.data) {
         Ok(m) => m,
@@ -468,6 +505,19 @@ async fn handle_gossip_message(
                     hex::encode(&edge.target_pubkey[..8]),
                 );
                 let _ = event_tx.send(NodeEvent::EdgeReceived { edge_json }).await;
+            }
+        }
+        PulseMessage::ProfileUpdate { profile_json } => {
+            if let Ok(meta) = serde_json::from_str::<pulse_store::profile_store::ProfileMeta>(&profile_json) {
+                if let Err(e) = profile_store.set_profile(&meta) {
+                    error!("Failed to store profile: {e}");
+                    return;
+                }
+                debug!(
+                    "Stored profile for {}{}",
+                    hex::encode(&meta.pubkey[..8]),
+                    meta.display_name.as_ref().map(|n| format!(" ({})", n)).unwrap_or_default(),
+                );
             }
         }
         _ => {}

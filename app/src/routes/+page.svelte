@@ -32,6 +32,7 @@
   let composeText = $state("");
   let composeReplyTo = $state(null);
   let edgeTargetPubkey = $state("");
+  let editDisplayName = $state("");
   let edgeType = $state("trust");
   let edgeWeight = $state(0.8);
   let bootstrapPeers = $state("");
@@ -212,6 +213,21 @@
   function charCount(text) {
     return [...text].length;
   }
+
+  function authorLabel(displayName, shortId) {
+    if (displayName) return displayName;
+    return shortId;
+  }
+
+  async function saveDisplayName() {
+    try {
+      error = "";
+      const name = editDisplayName.trim() || null;
+      await invoke("set_display_name", { name });
+      statusMsg = name ? `Display name set to "${name}"` : "Display name cleared";
+      if (view === "profile") await openProfile(null);
+    } catch (e) { error = e.toString(); }
+  }
 </script>
 
 <main>
@@ -306,7 +322,7 @@
           <div class="feed-item" class:own-item={item.item_type === "own"} class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"}>
             <div class="feed-meta">
               <button class="link-btn author" onclick={() => openProfile(item.author_pubkey)}>
-                {item.item_type === "own" ? "you" : item.author_short_id}
+                {item.item_type === "own" ? "you" : authorLabel(item.author_display_name, item.author_short_id)}
               </button>
               <span class="timestamp">{timeAgo(item.timestamp)}</span>
               {#if item.item_type === "own"}
@@ -343,7 +359,7 @@
       {#each branchStubs as stub}
         <div class="feed-item">
           <div class="feed-meta">
-            <button class="link-btn author" onclick={() => openProfile(stub.author_pubkey)}>{stub.author_short_id}</button>
+            <button class="link-btn author" onclick={() => openProfile(stub.author_pubkey)}>{authorLabel(stub.author_display_name, stub.author_short_id)}</button>
             <span class="timestamp">{timeAgo(stub.timestamp)}</span>
             {#if stub.is_root}<span class="edge-badge root">root</span>{/if}
           </div>
@@ -365,10 +381,19 @@
       {#if profileData}
         <div class="card profile-card">
           <h2>{profileData.pubkey === myPubkey ? "Your Profile" : "Profile"}</h2>
+          {#if profileData.display_name}
+            <p class="display-name-label">{profileData.display_name}</p>
+          {/if}
           <div class="pubkey-display">
             <span class="mono">{profileData.short_id}</span>
             <button class="link-btn" onclick={() => navigator.clipboard.writeText(profileData.pubkey)}>copy full key</button>
           </div>
+          {#if profileData.pubkey === myPubkey}
+            <div class="edit-name">
+              <input type="text" placeholder="Set display name (any text)" bind:value={editDisplayName} onkeydown={(e) => e.key === "Enter" && saveDisplayName()} />
+              <button onclick={saveDisplayName}>{editDisplayName.trim() ? "Save" : "Clear"}</button>
+            </div>
+          {/if}
           <div class="metrics">
             <div class="metric">
               <span class="metric-value">{profileData.trust_density}</span>
@@ -428,7 +453,7 @@
         {#each knownIdentities as person}
           {#if person.pubkey !== myPubkey}
             <div class="person-row">
-              <button class="link-btn author" onclick={() => openProfile(person.pubkey)}>{person.short_id}</button>
+              <button class="link-btn author" onclick={() => openProfile(person.pubkey)}>{authorLabel(person.display_name, person.short_id)}</button>
               <span class="person-stats">{person.stub_count} stubs / {person.trust_density} trusted</span>
               <div class="person-actions">
                 <button class="small-btn" onclick={() => { edgeTargetPubkey = person.pubkey; edgeType = "trust"; createEdge(); }}>trust</button>
@@ -797,6 +822,9 @@
   .person-actions { display: flex; gap: 4px; }
 
   .profile-card { text-align: center; }
+  .display-name-label { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .edit-name { display: flex; gap: 8px; margin-top: 12px; }
+  .edit-name input { flex: 1; margin-bottom: 0; }
   .profile-card .pubkey-display { justify-content: center; }
 
   .addr-row {

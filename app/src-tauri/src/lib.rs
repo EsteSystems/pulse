@@ -13,6 +13,7 @@ use pulse_identity::keystore::EncryptedKeystore;
 use pulse_network::node::{NodeConfig, NodeEvent, PulseNode};
 use pulse_store::branch_store::BranchStore;
 use pulse_store::graph_store::{EdgeType, GraphStore};
+use pulse_store::profile_store::{ProfileMeta, ProfileStore};
 use pulse_store::stub_store::StubStore;
 use pulse_stub::format::{BranchVector, ReplyEligibility};
 use pulse_stub::signing::create_inline_stub;
@@ -23,6 +24,7 @@ pub struct AppState {
     stub_store: Arc<StubStore>,
     graph_store: Arc<GraphStore>,
     branch_store: Arc<BranchStore>,
+    profile_store: Arc<ProfileStore>,
     node: Mutex<Option<PulseNode>>,
     listen_addrs: Arc<RwLock<Vec<String>>>,
     data_dir: PathBuf,
@@ -35,6 +37,7 @@ pub struct StubDto {
     pub content_hash: String,
     pub author_pubkey: String,
     pub author_short_id: String,
+    pub author_display_name: Option<String>,
     pub timestamp: u64,
     pub text: Option<String>,
     pub is_root: bool,
@@ -44,11 +47,12 @@ pub struct StubDto {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FeedItemDto {
-    pub item_type: String, // "trust" or "watch"
+    pub item_type: String, // "own", "trust", or "watch"
     pub stub: Option<StubDto>,
     pub content_hash: Option<String>,
     pub author_pubkey: Option<String>,
     pub author_short_id: Option<String>,
+    pub author_display_name: Option<String>,
     pub timestamp: u64,
     pub trust_weight: Option<f32>,
     pub branch_id: Option<String>,
@@ -58,6 +62,7 @@ pub struct FeedItemDto {
 pub struct ProfileDto {
     pub pubkey: String,
     pub short_id: String,
+    pub display_name: Option<String>,
     pub trust_density: usize,
     pub watch_count: usize,
     pub silence_count: usize,
@@ -84,11 +89,16 @@ pub struct NetworkStatusDto {
 
 // ---- Helpers ----
 
-fn stub_to_dto(stub: &pulse_stub::format::Stub) -> StubDto {
+fn resolve_name(profile_store: &ProfileStore, pubkey: &[u8; 32]) -> Option<String> {
+    profile_store.get_display_name(pubkey).ok().flatten()
+}
+
+fn stub_to_dto(stub: &pulse_stub::format::Stub, profile_store: &ProfileStore) -> StubDto {
     StubDto {
         content_hash: hex::encode(stub.content_hash),
         author_pubkey: hex::encode(stub.author_pubkey),
         author_short_id: hex::encode(&stub.author_pubkey[..8]),
+        author_display_name: resolve_name(profile_store, &stub.author_pubkey),
         timestamp: stub.timestamp,
         text: stub.inline_text().ok().flatten(),
         is_root: stub.branch_vector.is_root(),
@@ -101,24 +111,26 @@ fn stub_to_dto(stub: &pulse_stub::format::Stub) -> StubDto {
     }
 }
 
-fn feed_item_to_dto(item: &FeedItem) -> FeedItemDto {
+fn feed_item_to_dto(item: &FeedItem, profile_store: &ProfileStore) -> FeedItemDto {
     match item {
         FeedItem::OwnStub { stub } => FeedItemDto {
             item_type: "own".into(),
-            stub: Some(stub_to_dto(stub)),
+            stub: Some(stub_to_dto(stub, profile_store)),
             content_hash: Some(hex::encode(stub.content_hash)),
             author_pubkey: Some(hex::encode(stub.author_pubkey)),
             author_short_id: Some(hex::encode(&stub.author_pubkey[..8])),
+            author_display_name: resolve_name(profile_store, &stub.author_pubkey),
             timestamp: stub.timestamp,
             trust_weight: None,
             branch_id: Some(hex::encode(stub.branch_id())),
         },
         FeedItem::TrustStub { stub, trust_weight } => FeedItemDto {
             item_type: "trust".into(),
-            stub: Some(stub_to_dto(stub)),
+            stub: Some(stub_to_dto(stub, profile_store)),
             content_hash: Some(hex::encode(stub.content_hash)),
             author_pubkey: Some(hex::encode(stub.author_pubkey)),
             author_short_id: Some(hex::encode(&stub.author_pubkey[..8])),
+            author_display_name: resolve_name(profile_store, &stub.author_pubkey),
             timestamp: stub.timestamp,
             trust_weight: Some(*trust_weight),
             branch_id: Some(hex::encode(stub.branch_id())),
@@ -134,6 +146,7 @@ fn feed_item_to_dto(item: &FeedItem) -> FeedItemDto {
             content_hash: Some(hex::encode(content_hash)),
             author_pubkey: Some(hex::encode(author_pubkey)),
             author_short_id: Some(hex::encode(&author_pubkey[..8])),
+            author_display_name: resolve_name(profile_store, author_pubkey),
             timestamp: *timestamp,
             trust_weight: None,
             branch_id: Some(hex::encode(branch_id)),
@@ -202,6 +215,7 @@ async fn unlock_identity(state: State<'_, AppState>, passphrase: String) -> Resu
                         stub_store: Some(state.stub_store.clone()),
                         graph_store: Some(state.graph_store.clone()),
                         branch_store: Some(state.branch_store.clone()),
+                        profile_store: Some(state.profile_store.clone()),
                     }).await {
                         Ok(mut node) => {
                             let listen_addrs = state.listen_addrs.clone();
@@ -262,6 +276,7 @@ async fn start_network(
         stub_store: Some(state.stub_store.clone()),
         graph_store: Some(state.graph_store.clone()),
         branch_store: Some(state.branch_store.clone()),
+        profile_store: Some(state.profile_store.clone()),
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -319,7 +334,7 @@ async fn publish_stub(
     let stub = create_inline_stub(identity, &text, bv, re)
         .map_err(|e| e.to_string())?;
 
-    let dto = stub_to_dto(&stub);
+    let dto = stub_to_dto(&stub, &state.profile_store);
 
     // Publish to network if running
     let node_lock = state.node.lock().await;
@@ -358,7 +373,8 @@ async fn get_feed(state: State<'_, AppState>, limit: Option<usize>) -> Result<Ve
     )
     .map_err(|e| e.to_string())?;
 
-    Ok(items.iter().map(feed_item_to_dto).collect())
+    let ps = &state.profile_store;
+    Ok(items.iter().map(|i| feed_item_to_dto(i, ps)).collect())
 }
 
 #[tauri::command]
@@ -474,6 +490,7 @@ async fn get_profile(
     Ok(ProfileDto {
         pubkey: hex::encode(target),
         short_id: hex::encode(&target[..8]),
+        display_name: resolve_name(&state.profile_store, &target),
         trust_density: metrics.trust_density,
         watch_count: metrics.watch_count,
         silence_count: metrics.silence_count,
@@ -496,7 +513,7 @@ async fn get_branch_stubs(
     let mut stubs = Vec::new();
     for hash in hashes {
         if let Ok(Some(stub)) = state.stub_store.get(&hash) {
-            stubs.push(stub_to_dto(&stub));
+            stubs.push(stub_to_dto(&stub, &state.profile_store));
         }
     }
     Ok(stubs)
@@ -548,6 +565,7 @@ async fn get_known_identities(state: State<'_, AppState>) -> Result<Vec<ProfileD
             identities.push(ProfileDto {
                 pubkey: hex::encode(stub.author_pubkey),
                 short_id: hex::encode(&stub.author_pubkey[..8]),
+                display_name: resolve_name(&state.profile_store, &stub.author_pubkey),
                 trust_density: metrics.trust_density,
                 watch_count: metrics.watch_count,
                 silence_count: metrics.silence_count,
@@ -557,6 +575,48 @@ async fn get_known_identities(state: State<'_, AppState>) -> Result<Vec<ProfileD
         }
     }
     Ok(identities)
+}
+
+#[tauri::command]
+async fn set_display_name(
+    state: State<'_, AppState>,
+    name: Option<String>,
+) -> Result<(), String> {
+    let id_guard = state.identity.read().await;
+    let identity = id_guard.as_ref().ok_or("No identity loaded")?;
+    let pubkey = identity.public_key_bytes();
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+
+    let meta = ProfileMeta {
+        pubkey,
+        display_name: name,
+        avatar: None,
+        timestamp,
+    };
+
+    state.profile_store.set_profile(&meta).map_err(|e| e.to_string())?;
+
+    // Publish to network
+    let profile_json = serde_json::to_string(&meta).map_err(|e| e.to_string())?;
+    let node_lock = state.node.lock().await;
+    if let Some(node) = node_lock.as_ref() {
+        node.publish_profile(profile_json).await.map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_display_name(
+    state: State<'_, AppState>,
+    pubkey: String,
+) -> Result<Option<String>, String> {
+    let pk = parse_pubkey(&pubkey)?;
+    state.profile_store.get_display_name(&pk).map_err(|e| e.to_string())
 }
 
 // ---- App Initialization ----
@@ -580,12 +640,16 @@ pub fn run() {
     let branch_store = Arc::new(
         BranchStore::open(&data_dir.join("branches.db")).expect("Failed to open branch store"),
     );
+    let profile_store = Arc::new(
+        ProfileStore::open(&data_dir.join("profiles.db")).expect("Failed to open profile store"),
+    );
 
     let app_state = AppState {
         identity: RwLock::new(None),
         stub_store,
         graph_store,
         branch_store,
+        profile_store,
         node: Mutex::new(None),
         listen_addrs: Arc::new(RwLock::new(Vec::new())),
         data_dir,
@@ -609,6 +673,8 @@ pub fn run() {
             get_branch_stubs,
             get_network_status,
             get_known_identities,
+            set_display_name,
+            get_display_name,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

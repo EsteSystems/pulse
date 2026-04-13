@@ -22,6 +22,11 @@ pub enum PulseMessage {
         /// Serialized stub bytes, or empty if not found.
         stub_bytes: Vec<u8>,
     },
+    /// Profile metadata update (display name, avatar).
+    ProfileUpdate {
+        /// JSON-serialized ProfileMeta.
+        profile_json: String,
+    },
 }
 
 impl PulseMessage {
