@@ -308,6 +308,14 @@ async fn start_network(
 }
 
 #[tauri::command]
+async fn dial_peer(state: State<'_, AppState>, addr: String) -> Result<(), String> {
+    let node_lock = state.node.lock().await;
+    let node = node_lock.as_ref().ok_or("Network not running")?;
+    let multiaddr: libp2p::Multiaddr = addr.parse().map_err(|e: libp2p::multiaddr::Error| e.to_string())?;
+    node.dial(multiaddr).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn publish_stub(
     state: State<'_, AppState>,
     text: String,
@@ -665,6 +673,7 @@ pub fn run() {
             unlock_identity,
             has_keystore,
             start_network,
+            dial_peer,
             publish_stub,
             get_feed,
             create_edge,

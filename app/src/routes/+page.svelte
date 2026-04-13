@@ -33,6 +33,7 @@
   let composeReplyTo = $state(null);
   let edgeTargetPubkey = $state("");
   let editDisplayName = $state("");
+  let dialPeerAddr = $state("");
   let feedShowAll = $state(false);
   let peopleSearch = $state("");
   let edgeType = $state("trust");
@@ -219,6 +220,17 @@
   function authorLabel(displayName, shortId) {
     if (displayName) return displayName;
     return shortId;
+  }
+
+  async function connectPeer() {
+    if (!dialPeerAddr.trim()) return;
+    try {
+      error = "";
+      await invoke("dial_peer", { addr: dialPeerAddr.trim() });
+      statusMsg = "Connecting to peer...";
+      dialPeerAddr = "";
+      setTimeout(refreshNetworkStatus, 2000);
+    } catch (e) { error = e.toString(); }
   }
 
   async function spreadStub(contentHash) {
@@ -502,7 +514,7 @@
         {#if networkStatus.is_running}
           <p>Connected to {networkStatus.peer_count} peer(s)</p>
           {#if networkStatus.listen_addrs.length > 0}
-            <p class="hint">Share one of these addresses with another tester so they can connect to you:</p>
+            <p class="hint">Share an address so others can connect to you:</p>
             {#each networkStatus.listen_addrs as addr}
               <div class="addr-row">
                 <code class="mono small">{addr}</code>
@@ -510,6 +522,10 @@
               </div>
             {/each}
           {/if}
+          <div class="connect-peer">
+            <input type="text" placeholder="Paste a peer address to connect..." bind:value={dialPeerAddr} onkeydown={(e) => e.key === "Enter" && connectPeer()} />
+            <button onclick={connectPeer} disabled={!dialPeerAddr.trim()}>Connect</button>
+          </div>
         {:else}
           <textarea
             placeholder="Bootstrap peer addresses (one per line)"
@@ -896,6 +912,8 @@
     word-break: break-all;
   }
   .addr-row code { flex: 1; font-size: 11px; }
+  .connect-peer { display: flex; gap: 8px; margin-top: 12px; }
+  .connect-peer input { flex: 1; margin-bottom: 0; }
 
   .page { padding-top: 8px; }
 </style>
