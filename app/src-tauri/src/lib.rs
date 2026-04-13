@@ -101,6 +101,16 @@ fn stub_to_dto(stub: &pulse_stub::format::Stub) -> StubDto {
 
 fn feed_item_to_dto(item: &FeedItem) -> FeedItemDto {
     match item {
+        FeedItem::OwnStub { stub } => FeedItemDto {
+            item_type: "own".into(),
+            stub: Some(stub_to_dto(stub)),
+            content_hash: Some(hex::encode(stub.content_hash)),
+            author_pubkey: Some(hex::encode(stub.author_pubkey)),
+            author_short_id: Some(hex::encode(&stub.author_pubkey[..8])),
+            timestamp: stub.timestamp,
+            trust_weight: None,
+            branch_id: Some(hex::encode(stub.branch_id())),
+        },
         FeedItem::TrustStub { stub, trust_weight } => FeedItemDto {
             item_type: "trust".into(),
             stub: Some(stub_to_dto(stub)),

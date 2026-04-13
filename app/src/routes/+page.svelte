@@ -282,19 +282,21 @@
         </div>
       {:else}
         {#each feedItems as item}
-          <div class="feed-item" class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"}>
+          <div class="feed-item" class:own-item={item.item_type === "own"} class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"}>
             <div class="feed-meta">
               <button class="link-btn author" onclick={() => openProfile(item.author_pubkey)}>
-                {item.author_short_id}
+                {item.item_type === "own" ? "you" : item.author_short_id}
               </button>
               <span class="timestamp">{timeAgo(item.timestamp)}</span>
-              {#if item.item_type === "trust"}
+              {#if item.item_type === "own"}
+                <span class="edge-badge own">you</span>
+              {:else if item.item_type === "trust"}
                 <span class="edge-badge trust">trusted</span>
               {:else}
                 <span class="edge-badge watch">watched</span>
               {/if}
             </div>
-            {#if item.item_type === "trust" && item.stub}
+            {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
               <p class="stub-text">{item.stub.text || ""}</p>
               <div class="feed-actions">
                 <button class="link-btn" onclick={() => openBranch(item.branch_id)}>thread</button>
@@ -684,11 +686,13 @@
     border-radius: 4px;
     font-weight: 500;
   }
+  .edge-badge.own { background: #eff6ff; color: var(--accent); }
   .edge-badge.trust { background: #ecfdf5; color: var(--trust); }
   .edge-badge.watch { background: #fffbeb; color: var(--watch); }
   .edge-badge.silence { background: #fef2f2; color: var(--silence); }
   .edge-badge.root { background: #eff6ff; color: var(--accent); }
   @media (prefers-color-scheme: dark) {
+    .edge-badge.own { background: #0c1929; }
     .edge-badge.trust { background: #052e16; }
     .edge-badge.watch { background: #2d2006; }
     .edge-badge.silence { background: #2d1111; }

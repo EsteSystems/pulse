@@ -14,6 +14,10 @@ pub enum FeedError {
 /// A feed item — what the user sees in their feed.
 #[derive(Debug, Clone)]
 pub enum FeedItem {
+    /// Your own stub.
+    OwnStub {
+        stub: Stub,
+    },
     /// Full stub from a trusted account — content visible.
     TrustStub {
         stub: Stub,
@@ -31,6 +35,7 @@ pub enum FeedItem {
 impl FeedItem {
     pub fn timestamp(&self) -> u64 {
         match self {
+            FeedItem::OwnStub { stub } => stub.timestamp,
             FeedItem::TrustStub { stub, .. } => stub.timestamp,
             FeedItem::WatchHeader { timestamp, .. } => *timestamp,
         }
@@ -38,9 +43,14 @@ impl FeedItem {
 
     pub fn author(&self) -> &[u8; 32] {
         match self {
+            FeedItem::OwnStub { stub } => &stub.author_pubkey,
             FeedItem::TrustStub { stub, .. } => &stub.author_pubkey,
             FeedItem::WatchHeader { author_pubkey, .. } => author_pubkey,
         }
+    }
+
+    pub fn is_own(&self) -> bool {
+        matches!(self, FeedItem::OwnStub { .. })
     }
 
     pub fn is_trust(&self) -> bool {
@@ -91,8 +101,9 @@ pub fn build_feed(
             Err(_) => continue,
         };
 
-        // Skip own stubs in feed (you know what you wrote)
+        // Own stubs shown as a distinct type
         if stub.author_pubkey == *my_pubkey {
+            items.push(FeedItem::OwnStub { stub: stub.clone() });
             continue;
         }
 
@@ -123,9 +134,11 @@ pub fn build_feed(
         // Everyone else: not in feed (the feed goes quiet)
     }
 
-    // Sort: trust stubs first (by timestamp desc), then watch headers (by timestamp desc)
+    // Sort: own + trust stubs first (by timestamp desc), then watch headers (by timestamp desc)
     items.sort_by(|a, b| {
-        match (a.is_trust(), b.is_trust()) {
+        let a_priority = a.is_own() || a.is_trust();
+        let b_priority = b.is_own() || b.is_trust();
+        match (a_priority, b_priority) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             _ => b.timestamp().cmp(&a.timestamp()),
@@ -255,15 +268,15 @@ mod tests {
     }
 
     #[test]
-    fn own_stubs_excluded_from_feed() {
+    fn own_stubs_appear_as_own_type() {
         let (alice, _bob, _carol, _dave, stub_store, graph_store) = setup();
 
-        // Alice trusts herself won't happen (self-edge rejected), but her stubs should not appear
         let stub = create_inline_stub(&alice, "my own post", BranchVector::root(), ReplyEligibility::Open).unwrap();
         stub_store.put(&stub).unwrap();
 
         let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
-        assert_eq!(feed.len(), 0);
+        assert_eq!(feed.len(), 1);
+        assert!(feed[0].is_own());
     }
 
     #[test]
