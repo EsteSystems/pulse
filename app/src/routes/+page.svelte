@@ -34,6 +34,8 @@
   let edgeTargetPubkey = $state("");
   let editDisplayName = $state("");
   let dialPeerAddr = $state("");
+  let profileDetailView = $state(null); // "trusters" | "watchers" | "stubs" | "built_upon" | null
+  let profileDetailItems = $state([]);
   let feedShowAll = $state(false);
   let peopleSearch = $state("");
   let edgeType = $state("trust");
@@ -183,6 +185,8 @@
   async function openProfile(pubkey) {
     try {
       profileTarget = pubkey;
+      profileDetailView = null;
+      profileDetailItems = [];
       profileData = await invoke("get_profile", { pubkey: pubkey || null });
       view = "profile";
     } catch (e) { error = e.toString(); }
@@ -220,6 +224,22 @@
   function authorLabel(displayName, shortId) {
     if (displayName) return displayName;
     return shortId;
+  }
+
+  async function openProfileDetail(type_, pubkey) {
+    try {
+      error = "";
+      profileDetailView = type_;
+      if (type_ === "trusters") {
+        profileDetailItems = await invoke("get_trusters", { pubkey });
+      } else if (type_ === "watchers") {
+        profileDetailItems = await invoke("get_watchers", { pubkey });
+      } else if (type_ === "stubs") {
+        profileDetailItems = await invoke("get_authored_stubs", { pubkey });
+      } else if (type_ === "built_upon") {
+        profileDetailItems = await invoke("get_built_upon_stubs", { pubkey });
+      }
+    } catch (e) { error = e.toString(); }
   }
 
   async function connectPeer() {
@@ -421,23 +441,50 @@
             </div>
           {/if}
           <div class="metrics">
-            <div class="metric">
+            <button class="metric" class:clickable={profileData.trust_density > 0} onclick={() => profileData.trust_density > 0 && openProfileDetail("trusters", profileData.pubkey)} disabled={profileData.trust_density === 0}>
               <span class="metric-value">{profileData.trust_density}</span>
               <span class="metric-label">trust density</span>
-            </div>
-            <div class="metric">
+            </button>
+            <button class="metric" class:clickable={profileData.watch_count > 0} onclick={() => profileData.watch_count > 0 && openProfileDetail("watchers", profileData.pubkey)} disabled={profileData.watch_count === 0}>
               <span class="metric-value">{profileData.watch_count}</span>
               <span class="metric-label">watchers</span>
-            </div>
-            <div class="metric">
+            </button>
+            <button class="metric" class:clickable={profileData.built_upon_count > 0} onclick={() => profileData.built_upon_count > 0 && openProfileDetail("built_upon", profileData.pubkey)} disabled={profileData.built_upon_count === 0}>
               <span class="metric-value">{profileData.built_upon_count}</span>
               <span class="metric-label">built upon</span>
-            </div>
-            <div class="metric">
+            </button>
+            <button class="metric" class:clickable={profileData.stub_count > 0} onclick={() => profileData.stub_count > 0 && openProfileDetail("stubs", profileData.pubkey)} disabled={profileData.stub_count === 0}>
               <span class="metric-value">{profileData.stub_count}</span>
               <span class="metric-label">stubs</span>
-            </div>
+            </button>
           </div>
+
+          <!-- Detail panel -->
+          {#if profileDetailView}
+            <div class="detail-panel">
+              <div class="detail-header">
+                <h3>{profileDetailView === "trusters" ? "Trusted by" : profileDetailView === "watchers" ? "Watched by" : profileDetailView === "stubs" ? "Stubs" : "Built upon by"}</h3>
+                <button class="link-btn" onclick={() => { profileDetailView = null; profileDetailItems = []; }}>close</button>
+              </div>
+              {#if profileDetailView === "trusters" || profileDetailView === "watchers"}
+                {#each profileDetailItems as entry}
+                  <div class="detail-row">
+                    <button class="link-btn author" onclick={() => { profileDetailView = null; openProfile(entry.pubkey); }}>{authorLabel(entry.display_name, entry.short_id)}</button>
+                  </div>
+                {/each}
+              {:else}
+                {#each profileDetailItems as stub}
+                  <div class="detail-row">
+                    <p class="stub-text small">{stub.text || ""}</p>
+                    <span class="timestamp">{timeAgo(stub.timestamp)}</span>
+                  </div>
+                {/each}
+              {/if}
+              {#if profileDetailItems.length === 0}
+                <p class="muted">None yet.</p>
+              {/if}
+            </div>
+          {/if}
           {#if profileData.pubkey !== myPubkey}
             <div class="profile-actions">
               <button onclick={() => { edgeTargetPubkey = profileData.pubkey; edgeType = "trust"; createEdge(); }}>Trust</button>
@@ -855,7 +902,17 @@
     gap: 12px;
     margin: 16px 0;
   }
-  .metric { text-align: center; }
+  .metric {
+    text-align: center;
+    background-color: transparent;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 8px 4px;
+    cursor: default;
+  }
+  .metric:disabled { opacity: 0.5; }
+  .metric.clickable { cursor: pointer; border-color: var(--border); }
+  .metric.clickable:hover { background-color: var(--border); }
   .metric-value { display: block; font-size: 24px; font-weight: 700; }
   .metric-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
@@ -907,6 +964,25 @@
   .person-actions { display: flex; gap: 4px; }
 
   .profile-card { text-align: center; }
+  .detail-panel {
+    text-align: left;
+    border-top: 1px solid var(--border);
+    margin-top: 12px;
+    padding-top: 12px;
+  }
+  .detail-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .detail-header h3 { margin: 0; }
+  .detail-row {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-row .stub-text { flex: 1; margin: 0; }
+  .stub-text.small { font-size: 13px; }
+
   .display-name-label { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
   .edit-name { display: flex; gap: 8px; margin-top: 12px; }
   .edit-name input { flex: 1; margin-bottom: 0; }

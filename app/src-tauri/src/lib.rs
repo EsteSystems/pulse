@@ -671,6 +671,69 @@ async fn get_display_name(
     state.profile_store.get_display_name(&pk).map_err(|e| e.to_string())
 }
 
+/// Simple identity entry for lists.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct IdentityEntry {
+    pub pubkey: String,
+    pub short_id: String,
+    pub display_name: Option<String>,
+}
+
+#[tauri::command]
+async fn get_trusters(state: State<'_, AppState>, pubkey: String) -> Result<Vec<IdentityEntry>, String> {
+    let pk = parse_pubkey(&pubkey)?;
+    let edges = state.graph_store.get_inbound_by_type(&pk, EdgeType::Trust).map_err(|e| e.to_string())?;
+    Ok(edges.iter().map(|e| IdentityEntry {
+        pubkey: hex::encode(e.source_pubkey),
+        short_id: hex::encode(&e.source_pubkey[..8]),
+        display_name: resolve_name(&state.profile_store, &e.source_pubkey),
+    }).collect())
+}
+
+#[tauri::command]
+async fn get_watchers(state: State<'_, AppState>, pubkey: String) -> Result<Vec<IdentityEntry>, String> {
+    let pk = parse_pubkey(&pubkey)?;
+    let edges = state.graph_store.get_inbound_by_type(&pk, EdgeType::Watch).map_err(|e| e.to_string())?;
+    Ok(edges.iter().map(|e| IdentityEntry {
+        pubkey: hex::encode(e.source_pubkey),
+        short_id: hex::encode(&e.source_pubkey[..8]),
+        display_name: resolve_name(&state.profile_store, &e.source_pubkey),
+    }).collect())
+}
+
+#[tauri::command]
+async fn get_authored_stubs(state: State<'_, AppState>, pubkey: String) -> Result<Vec<StubDto>, String> {
+    let pk = parse_pubkey(&pubkey)?;
+    let mut stubs = Vec::new();
+    for result in state.stub_store.iter_all() {
+        let (_hash, stub) = match result { Ok(s) => s, Err(_) => continue };
+        if stub.author_pubkey == pk {
+            stubs.push(stub_to_dto(&stub, &state.profile_store));
+        }
+    }
+    stubs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    Ok(stubs)
+}
+
+#[tauri::command]
+async fn get_built_upon_stubs(state: State<'_, AppState>, pubkey: String) -> Result<Vec<StubDto>, String> {
+    let pk = parse_pubkey(&pubkey)?;
+    let mut authored_hashes = Vec::new();
+    for result in state.stub_store.iter_all() {
+        let (hash, stub) = match result { Ok(s) => s, Err(_) => continue };
+        if stub.author_pubkey == pk { authored_hashes.push(hash); }
+    }
+    let mut built = Vec::new();
+    for result in state.stub_store.iter_all() {
+        let (_hash, stub) = match result { Ok(s) => s, Err(_) => continue };
+        if stub.author_pubkey != pk && authored_hashes.contains(&stub.branch_vector.parent_hash) {
+            built.push(stub_to_dto(&stub, &state.profile_store));
+        }
+    }
+    built.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    Ok(built)
+}
+
 // ---- App Initialization ----
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -729,6 +792,10 @@ pub fn run() {
             get_known_identities,
             set_display_name,
             get_display_name,
+            get_trusters,
+            get_watchers,
+            get_authored_stubs,
+            get_built_upon_stubs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
