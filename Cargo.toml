@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pulse-identity",
+    "crates/pulse-stub",
+    "crates/pulse-store",
+    "crates/pulse-graph",
+    "crates/pulse-network",
+    "crates/pulse-core",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Cryptography
+ed25519-dalek = { version = "2", features = ["rand_core", "serde"] }
+blake3 = "1"
+argon2 = "0.5"
+rand = "0.8"
+
+# Encoding
+hex = "0.4"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+
+# Compression
+lz4_flex = "0.11"
+
+# Storage
+rocksdb = "0.24"
+rusqlite = { version = "0.39", features = ["bundled"] }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Testing
+proptest = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"

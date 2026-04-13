@@ -1,0 +1,18 @@
+[package]
+name = "pulse-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulse-identity = { path = "../pulse-identity" }
+pulse-stub = { path = "../pulse-stub" }
+pulse-store = { path = "../pulse-store" }
+pulse-graph = { path = "../pulse-graph" }
+tokio.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

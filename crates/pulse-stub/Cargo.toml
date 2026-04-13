@@ -1,0 +1,18 @@
+[package]
+name = "pulse-stub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pulse-identity = { path = "../pulse-identity" }
+blake3.workspace = true
+ed25519-dalek.workspace = true
+hex.workspace = true
+lz4_flex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rand.workspace = true

@@ -1,0 +1,1 @@
+// Trust-shaped feed construction
