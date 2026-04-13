@@ -219,6 +219,11 @@
     return shortId;
   }
 
+  async function spreadStub(contentHash) {
+    // TODO: implement spread action (task #15)
+    statusMsg = "Spread coming soon";
+  }
+
   async function saveDisplayName() {
     try {
       error = "";
@@ -319,32 +324,27 @@
         </div>
       {:else}
         {#each feedItems as item}
-          <div class="feed-item" class:own-item={item.item_type === "own"} class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"}>
-            <div class="feed-meta">
+          <div class="post-card" class:own-item={item.item_type === "own"} class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"}>
+            <!-- Content -->
+            {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
+              <p class="stub-text">{item.stub.text || ""}</p>
+            {:else}
+              <p class="stub-text muted">Header only — content on demand</p>
+            {/if}
+            <!-- Meta line: who, when, actions -->
+            <div class="post-meta">
               <button class="link-btn author" onclick={() => openProfile(item.author_pubkey)}>
                 {item.item_type === "own" ? "you" : authorLabel(item.author_display_name, item.author_short_id)}
               </button>
-              <span class="timestamp">{timeAgo(item.timestamp)}</span>
-              {#if item.item_type === "own"}
-                <span class="edge-badge own">you</span>
-              {:else if item.item_type === "trust"}
-                <span class="edge-badge trust">trusted</span>
-              {:else}
-                <span class="edge-badge watch">watched</span>
+              <span class="edge-dot" class:edge-own={item.item_type === "own"} class:edge-trust={item.item_type === "trust"} class:edge-watch={item.item_type === "watch"}></span>
+              <span class="timestamp" title={new Date(item.timestamp).toLocaleString()}>{timeAgo(item.timestamp)}</span>
+              <span class="meta-spacer"></span>
+              <button class="icon-btn" title="Thread" onclick={() => openBranch(item.branch_id)}>&#x1F5E8;</button>
+              {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
+                <button class="icon-btn" title="Reply" onclick={() => { composeReplyTo = item.stub.content_hash; }}>&#x21A9;</button>
+                <button class="icon-btn" title="Spread" onclick={() => { spreadStub(item.stub.content_hash); }}>&#x1F4E1;</button>
               {/if}
             </div>
-            {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
-              <p class="stub-text">{item.stub.text || ""}</p>
-              <div class="feed-actions">
-                <button class="link-btn" onclick={() => openBranch(item.branch_id)}>thread</button>
-                <button class="link-btn" onclick={() => { composeReplyTo = item.stub.content_hash; }}>reply</button>
-              </div>
-            {:else}
-              <p class="stub-text muted">Header only — tap to load content</p>
-              <div class="feed-actions">
-                <button class="link-btn" onclick={() => openBranch(item.branch_id)}>thread</button>
-              </div>
-            {/if}
           </div>
         {/each}
       {/if}
@@ -357,15 +357,15 @@
       <button class="link-btn back" onclick={() => navigateTo("feed")}>&larr; Back to feed</button>
       <h2>Thread</h2>
       {#each branchStubs as stub}
-        <div class="feed-item">
-          <div class="feed-meta">
-            <button class="link-btn author" onclick={() => openProfile(stub.author_pubkey)}>{authorLabel(stub.author_display_name, stub.author_short_id)}</button>
-            <span class="timestamp">{timeAgo(stub.timestamp)}</span>
-            {#if stub.is_root}<span class="edge-badge root">root</span>{/if}
-          </div>
+        <div class="post-card">
           <p class="stub-text">{stub.text || ""}</p>
-          <div class="feed-actions">
-            <button class="link-btn" onclick={() => { composeReplyTo = stub.content_hash; view = "feed"; }}>reply</button>
+          <div class="post-meta">
+            <button class="link-btn author" onclick={() => openProfile(stub.author_pubkey)}>{authorLabel(stub.author_display_name, stub.author_short_id)}</button>
+            {#if stub.is_root}<span class="edge-dot edge-root"></span>{/if}
+            <span class="timestamp" title={new Date(stub.timestamp).toLocaleString()}>{timeAgo(stub.timestamp)}</span>
+            <span class="meta-spacer"></span>
+            <button class="icon-btn" title="Reply" onclick={() => { composeReplyTo = stub.content_hash; view = "feed"; }}>&#x21A9;</button>
+            <button class="icon-btn" title="Spread" onclick={() => { spreadStub(stub.content_hash); }}>&#x1F4E1;</button>
           </div>
         </div>
       {/each}
@@ -724,19 +724,46 @@
     gap: 6px;
   }
 
-  .feed-item {
+  .post-card {
     border-bottom: 1px solid var(--border);
     padding: 12px 0;
   }
-  .feed-item:last-child { border-bottom: none; }
+  .post-card:last-child { border-bottom: none; }
 
-  .feed-meta {
+  .stub-text { margin: 0 0 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+
+  .post-meta {
     display: flex;
     align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
+    gap: 6px;
+    font-size: 13px;
   }
-  .timestamp { font-size: 12px; color: var(--text-muted); }
+  .meta-spacer { flex: 1; }
+  .timestamp { font-size: 12px; color: var(--text-muted); cursor: default; }
+
+  .edge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+  .edge-dot.edge-own { background-color: #2563eb; }
+  .edge-dot.edge-trust { background-color: #059669; }
+  .edge-dot.edge-watch { background-color: #d97706; }
+  .edge-dot.edge-root { background-color: #2563eb; }
+
+  .icon-btn {
+    background-color: transparent;
+    border: none;
+    padding: 2px 6px;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.4;
+    border-radius: 4px;
+    line-height: 1;
+  }
+  .icon-btn:hover { opacity: 1; background-color: var(--border); }
 
   .edge-badge {
     font-size: 11px;
@@ -744,21 +771,14 @@
     border-radius: 4px;
     font-weight: 500;
   }
-  .edge-badge.own { background: #eff6ff; color: var(--accent); }
   .edge-badge.trust { background: #ecfdf5; color: var(--trust); }
   .edge-badge.watch { background: #fffbeb; color: var(--watch); }
   .edge-badge.silence { background: #fef2f2; color: var(--silence); }
-  .edge-badge.root { background: #eff6ff; color: var(--accent); }
   @media (prefers-color-scheme: dark) {
-    .edge-badge.own { background: #0c1929; }
     .edge-badge.trust { background: #052e16; }
     .edge-badge.watch { background: #2d2006; }
     .edge-badge.silence { background: #2d1111; }
-    .edge-badge.root { background: #0c1929; }
   }
-
-  .stub-text { margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
-  .feed-actions { display: flex; gap: 8px; }
 
   .empty-state {
     text-align: center;
