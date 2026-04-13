@@ -1,2 +1,4 @@
-// P2P networking: libp2p, DHT, GossipSub, Merkle sync
-// Implementation in M2
+pub mod node;
+pub mod protocol;
+pub mod behaviour;
+pub mod messages;

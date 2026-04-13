@@ -43,21 +43,22 @@ pub struct BranchState {
 }
 
 /// SQLite-backed branch state storage.
+/// Wrapped in Mutex for Send + Sync across async boundaries.
 pub struct BranchStore {
-    conn: Connection,
+    conn: std::sync::Mutex<Connection>,
 }
 
 impl BranchStore {
     pub fn open(path: &Path) -> Result<Self, BranchStoreError> {
         let conn = Connection::open(path)?;
         Self::init_tables(&conn)?;
-        Ok(Self { conn })
+        Ok(Self { conn: std::sync::Mutex::new(conn) })
     }
 
     pub fn open_in_memory() -> Result<Self, BranchStoreError> {
         let conn = Connection::open_in_memory()?;
         Self::init_tables(&conn)?;
-        Ok(Self { conn })
+        Ok(Self { conn: std::sync::Mutex::new(conn) })
     }
 
     fn init_tables(conn: &Connection) -> Result<(), BranchStoreError> {
@@ -89,13 +90,13 @@ impl BranchStore {
         root_stub_hash: &[u8; 32],
         timestamp: u64,
     ) -> Result<BranchState, BranchStoreError> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT OR IGNORE INTO branches (branch_id, stub_count, last_activity, activation_state, root_stub_hash)
              VALUES (?1, 1, ?2, 0, ?1)",
             params![root_stub_hash.as_slice(), timestamp as i64],
         )?;
 
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT OR IGNORE INTO branch_stubs (branch_id, content_hash, timestamp)
              VALUES (?1, ?1, ?2)",
             params![root_stub_hash.as_slice(), timestamp as i64],
@@ -117,7 +118,8 @@ impl BranchStore {
         content_hash: &[u8; 32],
         timestamp: u64,
     ) -> Result<(), BranchStoreError> {
-        self.conn.execute(
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
             "INSERT OR IGNORE INTO branch_stubs (branch_id, content_hash, timestamp)
              VALUES (?1, ?2, ?3)",
             params![
@@ -127,7 +129,7 @@ impl BranchStore {
             ],
         )?;
 
-        self.conn.execute(
+        conn.execute(
             "UPDATE branches SET stub_count = stub_count + 1,
              last_activity = MAX(last_activity, ?2),
              activation_state = 0
@@ -140,7 +142,8 @@ impl BranchStore {
 
     /// Get branch state by ID.
     pub fn get_branch(&self, branch_id: &[u8; 32]) -> Result<Option<BranchState>, BranchStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT branch_id, stub_count, last_activity, activation_state, root_stub_hash
              FROM branches WHERE branch_id = ?1",
         )?;
@@ -157,7 +160,8 @@ impl BranchStore {
         &self,
         branch_id: &[u8; 32],
     ) -> Result<Vec<[u8; 32]>, BranchStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT content_hash FROM branch_stubs WHERE branch_id = ?1 ORDER BY timestamp ASC",
         )?;
 
@@ -178,7 +182,8 @@ impl BranchStore {
         &self,
         content_hash: &[u8; 32],
     ) -> Result<Option<[u8; 32]>, BranchStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT branch_id FROM branch_stubs WHERE content_hash = ?1 LIMIT 1",
         )?;
 
@@ -196,7 +201,8 @@ impl BranchStore {
 
     /// List all active branches, ordered by last_activity descending.
     pub fn list_active_branches(&self) -> Result<Vec<BranchState>, BranchStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT branch_id, stub_count, last_activity, activation_state, root_stub_hash
              FROM branches WHERE activation_state = 0 ORDER BY last_activity DESC",
         )?;
@@ -210,7 +216,7 @@ impl BranchStore {
 
     /// Mark a branch as dormant.
     pub fn mark_dormant(&self, branch_id: &[u8; 32]) -> Result<(), BranchStoreError> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "UPDATE branches SET activation_state = 1 WHERE branch_id = ?1",
             params![branch_id.as_slice()],
         )?;

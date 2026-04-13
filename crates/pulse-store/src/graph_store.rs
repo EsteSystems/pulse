@@ -71,8 +71,9 @@ pub struct Edge {
 }
 
 /// SQLite-backed social graph storage.
+/// Wrapped in Mutex for Send + Sync across async boundaries.
 pub struct GraphStore {
-    conn: Connection,
+    conn: std::sync::Mutex<Connection>,
 }
 
 impl GraphStore {
@@ -95,7 +96,7 @@ impl GraphStore {
             CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_pubkey);
             CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);",
         )?;
-        Ok(Self { conn })
+        Ok(Self { conn: std::sync::Mutex::new(conn) })
     }
 
     /// Open an in-memory graph store (for testing).
@@ -117,12 +118,12 @@ impl GraphStore {
             CREATE INDEX IF NOT EXISTS idx_edges_target ON edges(target_pubkey);
             CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type);",
         )?;
-        Ok(Self { conn })
+        Ok(Self { conn: std::sync::Mutex::new(conn) })
     }
 
     /// Insert or update an edge.
     pub fn put_edge(&self, edge: &Edge) -> Result<(), GraphStoreError> {
-        self.conn.execute(
+        self.conn.lock().unwrap().execute(
             "INSERT OR REPLACE INTO edges
              (source_pubkey, target_pubkey, edge_type, topic_scope, weight, timestamp, signature)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -147,7 +148,7 @@ impl GraphStore {
         edge_type: EdgeType,
         topic_scope: &[u8; 32],
     ) -> Result<bool, GraphStoreError> {
-        let changed = self.conn.execute(
+        let changed = self.conn.lock().unwrap().execute(
             "DELETE FROM edges WHERE source_pubkey = ?1 AND target_pubkey = ?2
              AND edge_type = ?3 AND topic_scope = ?4",
             params![
@@ -162,7 +163,8 @@ impl GraphStore {
 
     /// Get all outbound edges from a source.
     pub fn get_outbound(&self, source: &[u8; 32]) -> Result<Vec<Edge>, GraphStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT source_pubkey, target_pubkey, edge_type, topic_scope, weight, timestamp, signature
              FROM edges WHERE source_pubkey = ?1",
         )?;
@@ -176,7 +178,8 @@ impl GraphStore {
 
     /// Get all inbound edges to a target.
     pub fn get_inbound(&self, target: &[u8; 32]) -> Result<Vec<Edge>, GraphStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT source_pubkey, target_pubkey, edge_type, topic_scope, weight, timestamp, signature
              FROM edges WHERE target_pubkey = ?1",
         )?;
@@ -194,7 +197,8 @@ impl GraphStore {
         source: &[u8; 32],
         edge_type: EdgeType,
     ) -> Result<Vec<Edge>, GraphStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT source_pubkey, target_pubkey, edge_type, topic_scope, weight, timestamp, signature
              FROM edges WHERE source_pubkey = ?1 AND edge_type = ?2",
         )?;
@@ -212,7 +216,8 @@ impl GraphStore {
         target: &[u8; 32],
         edge_type: EdgeType,
     ) -> Result<Vec<Edge>, GraphStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT source_pubkey, target_pubkey, edge_type, topic_scope, weight, timestamp, signature
              FROM edges WHERE target_pubkey = ?1 AND edge_type = ?2",
         )?;
@@ -226,7 +231,7 @@ impl GraphStore {
 
     /// Count inbound trust edges (trust density — basic).
     pub fn trust_density(&self, target: &[u8; 32]) -> Result<usize, GraphStoreError> {
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn.lock().unwrap().query_row(
             "SELECT COUNT(*) FROM edges WHERE target_pubkey = ?1 AND edge_type = ?2",
             params![target.as_slice(), EdgeType::Trust as u8],
             |row| row.get(0),
@@ -236,7 +241,7 @@ impl GraphStore {
 
     /// Count inbound watch edges.
     pub fn watch_count(&self, target: &[u8; 32]) -> Result<usize, GraphStoreError> {
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn.lock().unwrap().query_row(
             "SELECT COUNT(*) FROM edges WHERE target_pubkey = ?1 AND edge_type = ?2",
             params![target.as_slice(), EdgeType::Watch as u8],
             |row| row.get(0),
@@ -246,7 +251,7 @@ impl GraphStore {
 
     /// Count inbound silence edges.
     pub fn silence_count(&self, target: &[u8; 32]) -> Result<usize, GraphStoreError> {
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn.lock().unwrap().query_row(
             "SELECT COUNT(*) FROM edges WHERE target_pubkey = ?1 AND edge_type = ?2",
             params![target.as_slice(), EdgeType::Silence as u8],
             |row| row.get(0),
@@ -256,7 +261,8 @@ impl GraphStore {
 
     /// Get all edges (for sync).
     pub fn get_all_edges(&self) -> Result<Vec<Edge>, GraphStoreError> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
             "SELECT source_pubkey, target_pubkey, edge_type, topic_scope, weight, timestamp, signature
              FROM edges",
         )?;
@@ -268,7 +274,7 @@ impl GraphStore {
 
     /// Check if a specific identity is silenced by a source.
     pub fn is_silenced(&self, source: &[u8; 32], target: &[u8; 32]) -> Result<bool, GraphStoreError> {
-        let count: i64 = self.conn.query_row(
+        let count: i64 = self.conn.lock().unwrap().query_row(
             "SELECT COUNT(*) FROM edges WHERE source_pubkey = ?1 AND target_pubkey = ?2 AND edge_type = ?3",
             params![source.as_slice(), target.as_slice(), EdgeType::Silence as u8],
             |row| row.get(0),
