@@ -313,6 +313,9 @@ impl Stub {
 }
 
 /// Compute the BLAKE3 content hash for text content.
+/// Text-only hashing: same text = same hash regardless of author or time.
+/// This enables content-addressable deduplication — the network stores
+/// the text once and tracks multiple signers separately.
 pub fn hash_content(text: &str) -> [u8; 32] {
     *blake3::hash(text.as_bytes()).as_bytes()
 }

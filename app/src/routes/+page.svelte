@@ -47,6 +47,8 @@
   let branchStubs = $state([]);
   let currentBranchId = $state("");
   let outboundEdges = $state([]);
+  let flippedCards = $state(new Set());
+  let cardSigners = $state({});
   let profileData = $state(null);
   let profileTarget = $state(null);
   let knownIdentities = $state([]);
@@ -242,6 +244,32 @@
     } catch (e) { error = e.toString(); }
   }
 
+  async function flipCard(contentHash) {
+    if (flippedCards.has(contentHash)) {
+      flippedCards.delete(contentHash);
+      flippedCards = new Set(flippedCards);
+      return;
+    }
+    // Load signers if not cached
+    if (!cardSigners[contentHash]) {
+      try {
+        cardSigners[contentHash] = await invoke("get_stub_signers", { contentHash });
+        cardSigners = { ...cardSigners };
+      } catch (e) { error = e.toString(); return; }
+    }
+    flippedCards.add(contentHash);
+    flippedCards = new Set(flippedCards);
+  }
+
+  function handleCardClick(e, contentHash) {
+    // Don't flip if user is selecting text
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) return;
+    // Don't flip if clicking a button/link inside the card
+    if (e.target.closest('button') || e.target.closest('a')) return;
+    flipCard(contentHash);
+  }
+
   async function connectPeer() {
     if (!dialPeerAddr.trim()) return;
     try {
@@ -367,30 +395,48 @@
         </div>
       {:else}
         {#each feedItems as item}
-          <div class="post-card" class:own-item={item.item_type === "own"} class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"}>
-            <!-- Content -->
-            {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
-              {#if item.stub.spread_of}
-                <p class="spread-label">&#x1F4E1; spread</p>
-              {/if}
-              <p class="stub-text">{item.stub.text || ""}</p>
+          {@const hash = item.content_hash || (item.stub && item.stub.content_hash)}
+          {@const isFlipped = hash && flippedCards.has(hash)}
+          <div class="post-card" class:own-item={item.item_type === "own"} class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"} class:flipped={isFlipped} onclick={(e) => hash && handleCardClick(e, hash)}>
+            {#if isFlipped && cardSigners[hash]}
+              <!-- BACK: signer details -->
+              <div class="card-back">
+                <p class="card-back-title">{cardSigners[hash].length} signer{cardSigners[hash].length !== 1 ? 's' : ''}</p>
+                {#each cardSigners[hash] as signer}
+                  <div class="signer-row">
+                    <button class="link-btn author" onclick={() => openProfile(signer.author_pubkey)}>{authorLabel(signer.author_display_name, signer.author_short_id)}</button>
+                    <span class="timestamp" title={new Date(signer.timestamp).toLocaleString()}>{timeAgo(signer.timestamp)}</span>
+                  </div>
+                {/each}
+              </div>
             {:else}
-              <p class="stub-text muted">Header only — content on demand</p>
-            {/if}
-            <!-- Meta line: who, when, actions -->
-            <div class="post-meta">
-              <button class="link-btn author" onclick={() => openProfile(item.author_pubkey)}>
-                {item.item_type === "own" ? "you" : authorLabel(item.author_display_name, item.author_short_id)}
-              </button>
-              <span class="edge-dot" class:edge-own={item.item_type === "own"} class:edge-trust={item.item_type === "trust"} class:edge-watch={item.item_type === "watch"}></span>
-              <span class="timestamp" title={new Date(item.timestamp).toLocaleString()}>{timeAgo(item.timestamp)}</span>
-              <span class="meta-spacer"></span>
-              <button class="icon-btn" title="Thread" onclick={() => openBranch(item.branch_id)}>&#x1F5E8;</button>
+              <!-- FRONT: content -->
               {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
-                <button class="icon-btn" title="Reply" onclick={() => { composeReplyTo = item.stub.content_hash; }}>&#x21A9;</button>
-                <button class="icon-btn" title="Spread" onclick={() => { spreadStub(item.stub.content_hash); }}>&#x1F4E1;</button>
+                {#if item.stub.spread_of}
+                  <p class="spread-label">&#x1F4E1; spread</p>
+                {/if}
+                <p class="stub-text">{item.stub.text || ""}</p>
+              {:else}
+                <p class="stub-text muted">Header only — content on demand</p>
               {/if}
-            </div>
+              <!-- Meta line -->
+              <div class="post-meta">
+                <button class="link-btn author" onclick={() => openProfile(item.author_pubkey)}>
+                  {item.item_type === "own" ? "you" : authorLabel(item.author_display_name, item.author_short_id)}
+                </button>
+                <span class="edge-dot" class:edge-own={item.item_type === "own"} class:edge-trust={item.item_type === "trust"} class:edge-watch={item.item_type === "watch"}></span>
+                <span class="timestamp" title={new Date(item.timestamp).toLocaleString()}>{timeAgo(item.timestamp)}</span>
+                {#if item.stub && item.stub.signer_count > 1}
+                  <span class="signer-badge">{item.stub.signer_count} signers</span>
+                {/if}
+                <span class="meta-spacer"></span>
+                <button class="icon-btn" title="Thread" onclick={() => openBranch(item.branch_id)}>&#x1F5E8;</button>
+                {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
+                  <button class="icon-btn" title="Reply" onclick={() => { composeReplyTo = item.stub.content_hash; }}>&#x21A9;</button>
+                  <button class="icon-btn" title="Spread" onclick={() => { spreadStub(item.stub.content_hash); }}>&#x1F4E1;</button>
+                {/if}
+              </div>
+            {/if}
           </div>
         {/each}
       {/if}
@@ -841,6 +887,38 @@
     padding: 12px 0;
   }
   .post-card:last-child { border-bottom: none; }
+  .post-card { cursor: pointer; }
+  .post-card.flipped { background-color: #f5f5f5; border-radius: 8px; padding: 12px; margin: 4px 0; }
+  @media (prefers-color-scheme: dark) {
+    .post-card.flipped { background-color: #1a1a1a; }
+  }
+
+  .card-back-title { font-size: 13px; font-weight: 600; color: #1a1a1a; margin: 0 0 8px; }
+  @media (prefers-color-scheme: dark) {
+    .card-back-title { color: #e5e5e5; }
+  }
+  .signer-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid #e5e5e5;
+  }
+  @media (prefers-color-scheme: dark) {
+    .signer-row { border-color: #333; }
+  }
+  .signer-row:last-child { border-bottom: none; }
+
+  .signer-badge {
+    font-size: 11px;
+    color: #888;
+    background-color: #f0f0f0;
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  @media (prefers-color-scheme: dark) {
+    .signer-badge { background-color: #2a2a2a; }
+  }
 
   .spread-label { font-size: 11px; color: #888; margin: 0 0 2px; }
   .stub-text { margin: 0 0 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }

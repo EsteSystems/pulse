@@ -24,6 +24,7 @@ async fn two_nodes_exchange_stubs() {
         graph_store: None,
         branch_store: None,
         profile_store: None,
+        signer_store: None,
     })
     .await
     .unwrap();
@@ -47,6 +48,7 @@ async fn two_nodes_exchange_stubs() {
         graph_store: None,
         branch_store: None,
         profile_store: None,
+        signer_store: None,
     })
     .await
     .unwrap();

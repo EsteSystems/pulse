@@ -14,6 +14,7 @@ use pulse_network::node::{NodeConfig, NodeEvent, PulseNode};
 use pulse_store::branch_store::BranchStore;
 use pulse_store::graph_store::{EdgeType, GraphStore};
 use pulse_store::profile_store::{ProfileMeta, ProfileStore};
+use pulse_store::signer_store::SignerStore;
 use pulse_store::stub_store::StubStore;
 use pulse_stub::format::{BranchVector, ReplyEligibility};
 use pulse_stub::signing::create_inline_stub;
@@ -25,6 +26,7 @@ pub struct AppState {
     graph_store: Arc<GraphStore>,
     branch_store: Arc<BranchStore>,
     profile_store: Arc<ProfileStore>,
+    signer_store: Arc<SignerStore>,
     node: Mutex<Option<PulseNode>>,
     listen_addrs: Arc<RwLock<Vec<String>>>,
     data_dir: PathBuf,
@@ -44,6 +46,7 @@ pub struct StubDto {
     pub parent_hash: Option<String>,
     pub branch_id: String,
     pub spread_of: Option<String>,
+    pub signer_count: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,7 +97,8 @@ fn resolve_name(profile_store: &ProfileStore, pubkey: &[u8; 32]) -> Option<Strin
     profile_store.get_display_name(pubkey).ok().flatten()
 }
 
-fn stub_to_dto(stub: &pulse_stub::format::Stub, profile_store: &ProfileStore) -> StubDto {
+fn stub_to_dto(stub: &pulse_stub::format::Stub, profile_store: &ProfileStore, signer_store: &SignerStore) -> StubDto {
+    let signer_count = signer_store.unique_author_count(&stub.content_hash).unwrap_or(0);
     StubDto {
         content_hash: hex::encode(stub.content_hash),
         author_pubkey: hex::encode(stub.author_pubkey),
@@ -110,14 +114,15 @@ fn stub_to_dto(stub: &pulse_stub::format::Stub, profile_store: &ProfileStore) ->
         },
         branch_id: hex::encode(stub.branch_id()),
         spread_of: stub.branch_vector.explicit_refs.first().map(hex::encode),
+        signer_count,
     }
 }
 
-fn feed_item_to_dto(item: &FeedItem, profile_store: &ProfileStore) -> FeedItemDto {
+fn feed_item_to_dto(item: &FeedItem, profile_store: &ProfileStore, signer_store: &SignerStore) -> FeedItemDto {
     match item {
         FeedItem::OwnStub { stub } => FeedItemDto {
             item_type: "own".into(),
-            stub: Some(stub_to_dto(stub, profile_store)),
+            stub: Some(stub_to_dto(stub, profile_store, signer_store)),
             content_hash: Some(hex::encode(stub.content_hash)),
             author_pubkey: Some(hex::encode(stub.author_pubkey)),
             author_short_id: Some(hex::encode(&stub.author_pubkey[..8])),
@@ -128,7 +133,7 @@ fn feed_item_to_dto(item: &FeedItem, profile_store: &ProfileStore) -> FeedItemDt
         },
         FeedItem::TrustStub { stub, trust_weight } => FeedItemDto {
             item_type: "trust".into(),
-            stub: Some(stub_to_dto(stub, profile_store)),
+            stub: Some(stub_to_dto(stub, profile_store, signer_store)),
             content_hash: Some(hex::encode(stub.content_hash)),
             author_pubkey: Some(hex::encode(stub.author_pubkey)),
             author_short_id: Some(hex::encode(&stub.author_pubkey[..8])),
@@ -218,6 +223,7 @@ async fn unlock_identity(state: State<'_, AppState>, passphrase: String) -> Resu
                         graph_store: Some(state.graph_store.clone()),
                         branch_store: Some(state.branch_store.clone()),
                         profile_store: Some(state.profile_store.clone()),
+                        signer_store: Some(state.signer_store.clone()),
                     }).await {
                         Ok(mut node) => {
                             let listen_addrs = state.listen_addrs.clone();
@@ -279,6 +285,7 @@ async fn start_network(
         graph_store: Some(state.graph_store.clone()),
         branch_store: Some(state.branch_store.clone()),
         profile_store: Some(state.profile_store.clone()),
+        signer_store: Some(state.signer_store.clone()),
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -343,7 +350,7 @@ async fn spread_stub(
     let stub = create_inline_stub(identity, &original_text, bv, ReplyEligibility::Open)
         .map_err(|e| e.to_string())?;
 
-    let mut dto = stub_to_dto(&stub, &state.profile_store);
+    let mut dto = stub_to_dto(&stub, &state.profile_store, &state.signer_store);
     dto.spread_of = Some(content_hash.clone());
 
     // Publish
@@ -385,7 +392,7 @@ async fn publish_stub(
     let stub = create_inline_stub(identity, &text, bv, re)
         .map_err(|e| e.to_string())?;
 
-    let dto = stub_to_dto(&stub, &state.profile_store);
+    let dto = stub_to_dto(&stub, &state.profile_store, &state.signer_store);
 
     // Publish to network if running
     let node_lock = state.node.lock().await;
@@ -426,7 +433,8 @@ async fn get_feed(state: State<'_, AppState>, limit: Option<usize>, show_all: Op
     .map_err(|e| e.to_string())?;
 
     let ps = &state.profile_store;
-    Ok(items.iter().map(|i| feed_item_to_dto(i, ps)).collect())
+    let ss = &state.signer_store;
+    Ok(items.iter().map(|i| feed_item_to_dto(i, ps, ss)).collect())
 }
 
 #[tauri::command]
@@ -565,7 +573,7 @@ async fn get_branch_stubs(
     let mut stubs = Vec::new();
     for hash in hashes {
         if let Ok(Some(stub)) = state.stub_store.get(&hash) {
-            stubs.push(stub_to_dto(&stub, &state.profile_store));
+            stubs.push(stub_to_dto(&stub, &state.profile_store, &state.signer_store));
         }
     }
     Ok(stubs)
@@ -671,6 +679,29 @@ async fn get_display_name(
     state.profile_store.get_display_name(&pk).map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SignerEntry {
+    pub author_pubkey: String,
+    pub author_short_id: String,
+    pub author_display_name: Option<String>,
+    pub timestamp: u64,
+}
+
+#[tauri::command]
+async fn get_stub_signers(
+    state: State<'_, AppState>,
+    content_hash: String,
+) -> Result<Vec<SignerEntry>, String> {
+    let hash = parse_pubkey(&content_hash)?;
+    let signers = state.signer_store.get_signers(&hash).map_err(|e| e.to_string())?;
+    Ok(signers.iter().map(|s| SignerEntry {
+        author_pubkey: hex::encode(s.author_pubkey),
+        author_short_id: hex::encode(&s.author_pubkey[..8]),
+        author_display_name: resolve_name(&state.profile_store, &s.author_pubkey),
+        timestamp: s.timestamp,
+    }).collect())
+}
+
 /// Simple identity entry for lists.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IdentityEntry {
@@ -708,7 +739,7 @@ async fn get_authored_stubs(state: State<'_, AppState>, pubkey: String) -> Resul
     for result in state.stub_store.iter_all() {
         let (_hash, stub) = match result { Ok(s) => s, Err(_) => continue };
         if stub.author_pubkey == pk {
-            stubs.push(stub_to_dto(&stub, &state.profile_store));
+            stubs.push(stub_to_dto(&stub, &state.profile_store, &state.signer_store));
         }
     }
     stubs.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -727,7 +758,7 @@ async fn get_built_upon_stubs(state: State<'_, AppState>, pubkey: String) -> Res
     for result in state.stub_store.iter_all() {
         let (_hash, stub) = match result { Ok(s) => s, Err(_) => continue };
         if stub.author_pubkey != pk && authored_hashes.contains(&stub.branch_vector.parent_hash) {
-            built.push(stub_to_dto(&stub, &state.profile_store));
+            built.push(stub_to_dto(&stub, &state.profile_store, &state.signer_store));
         }
     }
     built.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -765,6 +796,9 @@ pub fn run() {
         graph_store,
         branch_store,
         profile_store,
+        signer_store: Arc::new(
+            SignerStore::open(&data_dir.join("signers.db")).expect("Failed to open signer store"),
+        ),
         node: Mutex::new(None),
         listen_addrs: Arc::new(RwLock::new(Vec::new())),
         data_dir,
@@ -796,6 +830,7 @@ pub fn run() {
             get_watchers,
             get_authored_stubs,
             get_built_upon_stubs,
+            get_stub_signers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

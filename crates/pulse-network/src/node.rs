@@ -14,6 +14,7 @@ use tracing::{debug, error, info, warn};
 use pulse_store::branch_store::BranchStore;
 use pulse_store::graph_store::GraphStore;
 use pulse_store::profile_store::ProfileStore;
+use pulse_store::signer_store::{SignerRecord, SignerStore};
 use pulse_store::stub_store::StubStore;
 use pulse_stub::format::{BranchVector, Stub};
 use pulse_stub::signing::verify_stub_signature;
@@ -75,6 +76,7 @@ pub struct NodeConfig {
     pub graph_store: Option<Arc<GraphStore>>,
     pub branch_store: Option<Arc<BranchStore>>,
     pub profile_store: Option<Arc<ProfileStore>>,
+    pub signer_store: Option<Arc<SignerStore>>,
 }
 
 /// A running Pulse P2P node.
@@ -152,6 +154,11 @@ impl PulseNode {
             None => Arc::new(ProfileStore::open(&config.data_dir.join("profiles.db"))?),
         };
 
+        let signer_store = match config.signer_store {
+            Some(s) => s,
+            None => Arc::new(SignerStore::open(&config.data_dir.join("signers.db"))?),
+        };
+
         // Channels
         let (command_tx, command_rx) = mpsc::channel(256);
         let (event_tx, event_rx) = mpsc::channel(256);
@@ -165,6 +172,7 @@ impl PulseNode {
             graph_store,
             branch_store,
             profile_store,
+            signer_store,
             config.bootstrap_peers,
             stubs_topic,
             edges_topic,
@@ -218,6 +226,7 @@ async fn event_loop(
     graph_store: Arc<GraphStore>,
     branch_store: Arc<BranchStore>,
     profile_store: Arc<ProfileStore>,
+    signer_store: Arc<SignerStore>,
     bootstrap_peers: Vec<Multiaddr>,
     stubs_topic: IdentTopic,
     edges_topic: IdentTopic,
@@ -258,6 +267,7 @@ async fn event_loop(
                     &graph_store,
                     &branch_store,
                     &profile_store,
+                    &signer_store,
                     &stubs_topic,
                     &edges_topic,
                 ).await;
@@ -269,6 +279,7 @@ async fn event_loop(
                             &mut swarm,
                             &stub_store,
                             &branch_store,
+                            &signer_store,
                             &stubs_topic,
                             stub,
                         ).await;
@@ -327,6 +338,7 @@ async fn handle_swarm_event(
     graph_store: &Arc<GraphStore>,
     branch_store: &Arc<BranchStore>,
     profile_store: &Arc<ProfileStore>,
+    signer_store: &Arc<SignerStore>,
     stubs_topic: &IdentTopic,
     edges_topic: &IdentTopic,
 ) {
@@ -393,7 +405,7 @@ async fn handle_swarm_event(
             gossipsub::Event::Message { message, .. },
         )) => {
             handle_gossip_message(
-                &message, event_tx, stub_store, graph_store, branch_store, profile_store,
+                &message, event_tx, stub_store, graph_store, branch_store, profile_store, signer_store,
             )
             .await;
         }
@@ -425,6 +437,7 @@ async fn handle_gossip_message(
     graph_store: &Arc<GraphStore>,
     branch_store: &Arc<BranchStore>,
     profile_store: &Arc<ProfileStore>,
+    signer_store: &Arc<SignerStore>,
 ) {
     let msg = match PulseMessage::deserialize(&message.data) {
         Ok(m) => m,
@@ -444,11 +457,6 @@ async fn handle_gossip_message(
                 }
             };
 
-            // Already have it?
-            if stub_store.contains(&stub.content_hash).unwrap_or(false) {
-                return;
-            }
-
             // Validate
             if !validate_stub(&stub).is_valid() {
                 warn!(
@@ -458,7 +466,30 @@ async fn handle_gossip_message(
                 return;
             }
 
-            // Store
+            // Always record the signer (even if content already exists)
+            let _ = signer_store.add_signer(&SignerRecord {
+                content_hash: stub.content_hash,
+                author_pubkey: stub.author_pubkey,
+                timestamp: stub.timestamp,
+                signature: stub.signature,
+            });
+
+            // Store content (dedup — same text stored once)
+            if stub_store.contains(&stub.content_hash).unwrap_or(false) {
+                debug!(
+                    "Dedup: new signer for existing stub {}",
+                    hex::encode(&stub.content_hash[..8]),
+                );
+                // Still emit event so feed updates
+                let _ = event_tx
+                    .send(NodeEvent::StubReceived {
+                        content_hash: stub.content_hash,
+                        author_pubkey: stub.author_pubkey,
+                    })
+                    .await;
+                return;
+            }
+
             if let Err(e) = stub_store.put(&stub) {
                 error!("Failed to store stub: {e}");
                 return;
@@ -528,10 +559,19 @@ async fn handle_publish_stub(
     swarm: &mut Swarm<PulseBehaviour>,
     stub_store: &Arc<StubStore>,
     branch_store: &Arc<BranchStore>,
+    signer_store: &Arc<SignerStore>,
     stubs_topic: &IdentTopic,
     stub: Stub,
 ) {
-    // Store locally first
+    // Record signer
+    let _ = signer_store.add_signer(&SignerRecord {
+        content_hash: stub.content_hash,
+        author_pubkey: stub.author_pubkey,
+        timestamp: stub.timestamp,
+        signature: stub.signature,
+    });
+
+    // Store content locally
     if let Err(e) = stub_store.put(&stub) {
         error!("Failed to store own stub: {e}");
         return;
