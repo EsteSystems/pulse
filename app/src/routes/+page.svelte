@@ -34,6 +34,7 @@
   let edgeTargetPubkey = $state("");
   let editDisplayName = $state("");
   let feedShowAll = $state(false);
+  let peopleSearch = $state("");
   let edgeType = $state("trust");
   let edgeWeight = $state(0.8);
   let bootstrapPeers = $state("");
@@ -433,7 +434,10 @@
   <!-- People -->
   {#if view === "people"}
     <div class="page">
-      <h2>People on the network</h2>
+      <h2>People</h2>
+      <!-- Search -->
+      <input type="text" placeholder="Search by name or public key..." bind:value={peopleSearch} class="search-input" />
+
       <!-- Add edge manually -->
       <div class="card">
         <h3>Add by public key</h3>
@@ -456,8 +460,13 @@
       {#if knownIdentities.length === 0}
         <p class="muted">No other identities discovered yet. Connect to the network and wait for stubs to arrive.</p>
       {:else}
-        {#each knownIdentities as person}
-          {#if person.pubkey !== myPubkey}
+        {#each knownIdentities.filter(p => {
+          if (p.pubkey === myPubkey) return false;
+          if (!peopleSearch.trim()) return true;
+          const q = peopleSearch.toLowerCase();
+          return (p.display_name && p.display_name.toLowerCase().includes(q)) || p.pubkey.startsWith(q) || p.short_id.startsWith(q);
+        }) as person}
+          {#if true}
             <div class="person-row">
               <button class="link-btn author" onclick={() => openProfile(person.pubkey)}>{authorLabel(person.display_name, person.short_id)}</button>
               <span class="person-stats">{person.stub_count} stubs / {person.trust_density} trusted</span>
@@ -860,6 +869,8 @@
     border-bottom: 1px solid var(--border);
   }
   .edge-row:last-child { border-bottom: none; }
+
+  .search-input { margin-bottom: 12px; }
 
   .person-row {
     display: flex;
