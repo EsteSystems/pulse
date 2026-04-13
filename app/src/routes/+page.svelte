@@ -234,8 +234,12 @@
   }
 
   async function spreadStub(contentHash) {
-    // TODO: implement spread action (task #15)
-    statusMsg = "Spread coming soon";
+    try {
+      error = "";
+      await invoke("spread_stub", { contentHash });
+      statusMsg = "Spread";
+      await refreshFeed();
+    } catch (e) { error = e.toString(); }
   }
 
   async function saveDisplayName() {
@@ -346,6 +350,9 @@
           <div class="post-card" class:own-item={item.item_type === "own"} class:trust-item={item.item_type === "trust"} class:watch-item={item.item_type === "watch"}>
             <!-- Content -->
             {#if (item.item_type === "trust" || item.item_type === "own") && item.stub}
+              {#if item.stub.spread_of}
+                <p class="spread-label">&#x1F4E1; spread</p>
+              {/if}
               <p class="stub-text">{item.stub.text || ""}</p>
             {:else}
               <p class="stub-text muted">Header only — content on demand</p>
@@ -785,6 +792,7 @@
   }
   .post-card:last-child { border-bottom: none; }
 
+  .spread-label { font-size: 11px; color: var(--text-muted); margin: 0 0 2px; }
   .stub-text { margin: 0 0 6px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
 
   .post-meta {

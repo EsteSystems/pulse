@@ -43,6 +43,7 @@ pub struct StubDto {
     pub is_root: bool,
     pub parent_hash: Option<String>,
     pub branch_id: String,
+    pub spread_of: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -108,6 +109,7 @@ fn stub_to_dto(stub: &pulse_stub::format::Stub, profile_store: &ProfileStore) ->
             Some(hex::encode(stub.branch_vector.parent_hash))
         },
         branch_id: hex::encode(stub.branch_id()),
+        spread_of: stub.branch_vector.explicit_refs.first().map(hex::encode),
     }
 }
 
@@ -313,6 +315,47 @@ async fn dial_peer(state: State<'_, AppState>, addr: String) -> Result<(), Strin
     let node = node_lock.as_ref().ok_or("Network not running")?;
     let multiaddr: libp2p::Multiaddr = addr.parse().map_err(|e: libp2p::multiaddr::Error| e.to_string())?;
     node.dial(multiaddr).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn spread_stub(
+    state: State<'_, AppState>,
+    content_hash: String,
+) -> Result<StubDto, String> {
+    let id_guard = state.identity.read().await;
+    let identity = id_guard.as_ref().ok_or("No identity loaded")?;
+
+    let original_hash = parse_pubkey(&content_hash)?;
+    let original = state.stub_store.get(&original_hash)
+        .map_err(|e| e.to_string())?
+        .ok_or("Original stub not found")?;
+
+    let original_text = original.inline_text()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+
+    // Create a new root stub with the original's text and an explicit_ref to the original
+    let bv = pulse_stub::format::BranchVector {
+        parent_hash: [0u8; 32],
+        explicit_refs: vec![original_hash],
+    };
+
+    let stub = create_inline_stub(identity, &original_text, bv, ReplyEligibility::Open)
+        .map_err(|e| e.to_string())?;
+
+    let mut dto = stub_to_dto(&stub, &state.profile_store);
+    dto.spread_of = Some(content_hash.clone());
+
+    // Publish
+    let node_lock = state.node.lock().await;
+    if let Some(node) = node_lock.as_ref() {
+        node.publish_stub(stub).await.map_err(|e| e.to_string())?;
+    } else {
+        state.stub_store.put(&stub).map_err(|e| e.to_string())?;
+        let _ = state.branch_store.create_branch(&stub.content_hash, stub.timestamp);
+    }
+
+    Ok(dto)
 }
 
 #[tauri::command]
@@ -674,6 +717,7 @@ pub fn run() {
             has_keystore,
             start_network,
             dial_peer,
+            spread_stub,
             publish_stub,
             get_feed,
             create_edge,
