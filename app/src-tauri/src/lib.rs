@@ -360,7 +360,7 @@ async fn publish_stub(
 }
 
 #[tauri::command]
-async fn get_feed(state: State<'_, AppState>, limit: Option<usize>) -> Result<Vec<FeedItemDto>, String> {
+async fn get_feed(state: State<'_, AppState>, limit: Option<usize>, show_all: Option<bool>) -> Result<Vec<FeedItemDto>, String> {
     let id_guard = state.identity.read().await;
     let identity = id_guard.as_ref().ok_or("No identity loaded")?;
     let pubkey = identity.public_key_bytes();
@@ -370,6 +370,7 @@ async fn get_feed(state: State<'_, AppState>, limit: Option<usize>) -> Result<Ve
         &state.graph_store,
         &state.stub_store,
         limit.unwrap_or(100),
+        show_all.unwrap_or(false),
     )
     .map_err(|e| e.to_string())?;
 

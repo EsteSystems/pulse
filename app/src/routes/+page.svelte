@@ -10,7 +10,7 @@
     stopFeedPoll();
     feedPollInterval = setInterval(async () => {
       if (view === "feed") {
-        try { feedItems = await invoke("get_feed", { limit: 100 }); } catch {}
+        try { feedItems = await invoke("get_feed", { limit: 100, showAll: feedShowAll }); } catch {}
       }
     }, FEED_POLL_MS);
   }
@@ -33,6 +33,7 @@
   let composeReplyTo = $state(null);
   let edgeTargetPubkey = $state("");
   let editDisplayName = $state("");
+  let feedShowAll = $state(false);
   let edgeType = $state("trust");
   let edgeWeight = $state(0.8);
   let bootstrapPeers = $state("");
@@ -152,7 +153,7 @@
 
   async function refreshFeed() {
     try {
-      feedItems = await invoke("get_feed", { limit: 100 });
+      feedItems = await invoke("get_feed", { limit: 100, showAll: feedShowAll });
       startFeedPoll();
     } catch (e) { error = e.toString(); }
   }
@@ -296,6 +297,11 @@
   <!-- Feed -->
   {#if view === "feed"}
     <div class="page">
+      <!-- Feed mode toggle -->
+      <div class="feed-toggle">
+        <button class="toggle-btn" class:active={!feedShowAll} onclick={() => { feedShowAll = false; refreshFeed(); }}>My Graph</button>
+        <button class="toggle-btn" class:active={feedShowAll} onclick={() => { feedShowAll = true; refreshFeed(); }}>All</button>
+      </div>
       <!-- Compose -->
       <div class="compose-box">
         {#if composeReplyTo}
@@ -698,6 +704,30 @@
     color: var(--trust);
     font-size: 13px;
     margin-bottom: 8px;
+  }
+
+  .feed-toggle {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 12px;
+    background-color: var(--border);
+    border-radius: 8px;
+    padding: 2px;
+  }
+  .toggle-btn {
+    flex: 1;
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background-color: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .toggle-btn.active {
+    background-color: var(--bg-card);
+    color: var(--text);
   }
 
   .compose-box {

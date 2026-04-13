@@ -74,6 +74,7 @@ pub fn build_feed(
     graph_store: &GraphStore,
     stub_store: &StubStore,
     limit: usize,
+    show_all: bool,
 ) -> Result<Vec<FeedItem>, FeedError> {
     let mut items: Vec<FeedItem> = Vec::new();
 
@@ -129,9 +130,18 @@ pub fn build_feed(
                 timestamp: stub.timestamp,
                 branch_id: stub.branch_id(),
             });
+            continue;
         }
 
-        // Everyone else: not in feed (the feed goes quiet)
+        // In show_all mode: include everyone else as full stubs (no trust weight)
+        if show_all {
+            items.push(FeedItem::TrustStub {
+                stub: stub.clone(),
+                trust_weight: 0.0,
+            });
+        }
+
+        // In normal mode: everyone else not in feed (the feed goes quiet)
     }
 
     // Sort: own + trust stubs first (by timestamp desc), then watch headers (by timestamp desc)
@@ -185,7 +195,7 @@ mod tests {
         let stub = create_inline_stub(&bob, "trusted content", BranchVector::root(), ReplyEligibility::Open).unwrap();
         stub_store.put(&stub).unwrap();
 
-        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
+        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50, false).unwrap();
         assert_eq!(feed.len(), 1);
         assert!(feed[0].is_trust());
         if let FeedItem::TrustStub { stub: s, trust_weight } = &feed[0] {
@@ -206,7 +216,7 @@ mod tests {
         let stub = create_inline_stub(&carol, "watched content", BranchVector::root(), ReplyEligibility::Open).unwrap();
         stub_store.put(&stub).unwrap();
 
-        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
+        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50, false).unwrap();
         assert_eq!(feed.len(), 1);
         assert!(feed[0].is_watch());
         if let FeedItem::WatchHeader { author_pubkey, .. } = &feed[0] {
@@ -226,7 +236,7 @@ mod tests {
         let stub = create_inline_stub(&dave, "silenced content", BranchVector::root(), ReplyEligibility::Open).unwrap();
         stub_store.put(&stub).unwrap();
 
-        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
+        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50, false).unwrap();
         assert_eq!(feed.len(), 0); // Dave's content is excluded
     }
 
@@ -239,7 +249,7 @@ mod tests {
         let stub = create_inline_stub(&stranger, "stranger content", BranchVector::root(), ReplyEligibility::Open).unwrap();
         stub_store.put(&stub).unwrap();
 
-        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
+        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50, false).unwrap();
         assert_eq!(feed.len(), 0); // Stranger not in feed
     }
 
@@ -259,7 +269,7 @@ mod tests {
         stub_store.put(&create_inline_stub(&dave, "from dave", BranchVector::root(), ReplyEligibility::Open).unwrap()).unwrap();
         stub_store.put(&create_inline_stub(&stranger, "from stranger", BranchVector::root(), ReplyEligibility::Open).unwrap()).unwrap();
 
-        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
+        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50, false).unwrap();
 
         // Bob (trusted): full stub. Carol (watched): header. Dave (silenced): excluded. Stranger: excluded.
         assert_eq!(feed.len(), 2);
@@ -274,7 +284,7 @@ mod tests {
         let stub = create_inline_stub(&alice, "my own post", BranchVector::root(), ReplyEligibility::Open).unwrap();
         stub_store.put(&stub).unwrap();
 
-        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
+        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50, false).unwrap();
         assert_eq!(feed.len(), 1);
         assert!(feed[0].is_own());
     }
@@ -295,7 +305,7 @@ mod tests {
         let bob_stub = create_inline_stub(&bob, "bob second", BranchVector::root(), ReplyEligibility::Open).unwrap();
         stub_store.put(&bob_stub).unwrap();
 
-        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50).unwrap();
+        let feed = build_feed(&alice.public_key_bytes(), &graph_store, &stub_store, 50, false).unwrap();
         assert_eq!(feed.len(), 2);
         // Trust items come first regardless of timestamp
         assert!(feed[0].is_trust());
