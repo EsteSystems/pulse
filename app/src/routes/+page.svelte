@@ -1,6 +1,25 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
+
+  // Polling
+  let feedPollInterval = null;
+  const FEED_POLL_MS = 4000;
+
+  function startFeedPoll() {
+    stopFeedPoll();
+    feedPollInterval = setInterval(async () => {
+      if (view === "feed") {
+        try { feedItems = await invoke("get_feed", { limit: 100 }); } catch {}
+      }
+    }, FEED_POLL_MS);
+  }
+
+  function stopFeedPoll() {
+    if (feedPollInterval) { clearInterval(feedPollInterval); feedPollInterval = null; }
+  }
+
+  onDestroy(() => stopFeedPoll());
 
   // App state
   let view = $state("loading"); // loading | onboard | unlock | feed | branch | profile | people | settings
@@ -133,6 +152,7 @@
   async function refreshFeed() {
     try {
       feedItems = await invoke("get_feed", { limit: 100 });
+      startFeedPoll();
     } catch (e) { error = e.toString(); }
   }
 
@@ -174,7 +194,8 @@
   function navigateTo(v) {
     view = v;
     error = "";
-    if (v === "feed") refreshFeed();
+    if (v === "feed") { refreshFeed(); }
+    else { stopFeedPoll(); }
     if (v === "people") openPeople();
     if (v === "profile") openProfile(null);
     if (v === "settings") { refreshEdges(); refreshNetworkStatus(); }
