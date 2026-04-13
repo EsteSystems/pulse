@@ -25,7 +25,7 @@
   let profileData = $state(null);
   let profileTarget = $state(null);
   let knownIdentities = $state([]);
-  let networkStatus = $state({ peer_count: 0, is_running: false, local_peer_id: null });
+  let networkStatus = $state({ peer_count: 0, is_running: false, local_peer_id: null, listen_addrs: [] });
 
   // UI state
   let error = $state("");
@@ -440,7 +440,15 @@
         <h3>Network</h3>
         {#if networkStatus.is_running}
           <p>Connected to {networkStatus.peer_count} peer(s)</p>
-          <p class="mono small">{networkStatus.local_peer_id}</p>
+          {#if networkStatus.listen_addrs.length > 0}
+            <p class="hint">Share one of these addresses with another tester so they can connect to you:</p>
+            {#each networkStatus.listen_addrs as addr}
+              <div class="addr-row">
+                <code class="mono small">{addr}</code>
+                <button class="link-btn" onclick={() => navigator.clipboard.writeText(addr)}>copy</button>
+              </div>
+            {/each}
+          {/if}
         {:else}
           <textarea
             placeholder="Bootstrap peer addresses (one per line)"
@@ -765,6 +773,15 @@
 
   .profile-card { text-align: center; }
   .profile-card .pubkey-display { justify-content: center; }
+
+  .addr-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    word-break: break-all;
+  }
+  .addr-row code { flex: 1; font-size: 11px; }
 
   .page { padding-top: 8px; }
 </style>

@@ -65,8 +65,12 @@ pub struct NodeConfig {
     pub listen_port: u16,
     /// Bootstrap peers to connect to on startup.
     pub bootstrap_peers: Vec<Multiaddr>,
-    /// Path to the data directory.
+    /// Path to the data directory (used if stores not provided).
     pub data_dir: std::path::PathBuf,
+    /// Shared stores (if provided, data_dir is not used for stores).
+    pub stub_store: Option<Arc<StubStore>>,
+    pub graph_store: Option<Arc<GraphStore>>,
+    pub branch_store: Option<Arc<BranchStore>>,
 }
 
 /// A running Pulse P2P node.
@@ -119,18 +123,25 @@ impl PulseNode {
             .unwrap();
         let _ = swarm.listen_on(quic_addr);
 
-        // Open stores
-        let stub_store_path = config.data_dir.join("stubs");
-        std::fs::create_dir_all(&stub_store_path)?;
-        let stub_store = Arc::new(StubStore::open(&stub_store_path)?);
+        // Use provided stores or open new ones
+        let stub_store = match config.stub_store {
+            Some(s) => s,
+            None => {
+                let stub_store_path = config.data_dir.join("stubs");
+                std::fs::create_dir_all(&stub_store_path)?;
+                Arc::new(StubStore::open(&stub_store_path)?)
+            }
+        };
 
-        let graph_store = Arc::new(GraphStore::open(
-            &config.data_dir.join("graph.db"),
-        )?);
+        let graph_store = match config.graph_store {
+            Some(s) => s,
+            None => Arc::new(GraphStore::open(&config.data_dir.join("graph.db"))?),
+        };
 
-        let branch_store = Arc::new(BranchStore::open(
-            &config.data_dir.join("branches.db"),
-        )?);
+        let branch_store = match config.branch_store {
+            Some(s) => s,
+            None => Arc::new(BranchStore::open(&config.data_dir.join("branches.db"))?),
+        };
 
         // Channels
         let (command_tx, command_rx) = mpsc::channel(256);

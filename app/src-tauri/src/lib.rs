@@ -24,6 +24,7 @@ pub struct AppState {
     graph_store: Arc<GraphStore>,
     branch_store: Arc<BranchStore>,
     node: Mutex<Option<PulseNode>>,
+    listen_addrs: Arc<RwLock<Vec<String>>>,
     data_dir: PathBuf,
 }
 
@@ -78,6 +79,7 @@ pub struct NetworkStatusDto {
     pub peer_count: usize,
     pub is_running: bool,
     pub local_peer_id: Option<String>,
+    pub listen_addrs: Vec<String>,
 }
 
 // ---- Helpers ----
@@ -202,15 +204,39 @@ async fn start_network(
         .filter_map(|p| p.parse().ok())
         .collect();
 
-    let node = PulseNode::start(NodeConfig {
+    let mut node = PulseNode::start(NodeConfig {
         listen_port: 0,
         bootstrap_peers: peers,
         data_dir: state.data_dir.clone(),
+        stub_store: Some(state.stub_store.clone()),
+        graph_store: Some(state.graph_store.clone()),
+        branch_store: Some(state.branch_store.clone()),
     })
     .await
     .map_err(|e| e.to_string())?;
 
     let peer_id = node.local_peer_id.to_string();
+
+    // Collect listening addresses (arrive as events in the first few seconds)
+    let addrs = state.listen_addrs.clone();
+    let mut event_rx = std::mem::replace(&mut node.event_rx, tokio::sync::mpsc::channel(256).1);
+    let returned_event_tx = {
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        node.event_rx = rx;
+        tx
+    };
+
+    tokio::spawn(async move {
+        // Forward events and capture listen addresses
+        while let Some(event) = event_rx.recv().await {
+            if let NodeEvent::Listening(ref addr) = event {
+                let addr_str = addr.to_string();
+                addrs.write().await.push(addr_str);
+            }
+            let _ = returned_event_tx.send(event).await;
+        }
+    });
+
     *node_lock = Some(node);
     Ok(peer_id)
 }
@@ -428,6 +454,7 @@ async fn get_branch_stubs(
 #[tauri::command]
 async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatusDto, String> {
     let node_lock = state.node.lock().await;
+    let addrs = state.listen_addrs.read().await.clone();
     match node_lock.as_ref() {
         Some(node) => {
             let peer_count = node.peer_count().await.unwrap_or(0);
@@ -435,12 +462,14 @@ async fn get_network_status(state: State<'_, AppState>) -> Result<NetworkStatusD
                 peer_count,
                 is_running: true,
                 local_peer_id: Some(node.local_peer_id.to_string()),
+                listen_addrs: addrs,
             })
         }
         None => Ok(NetworkStatusDto {
             peer_count: 0,
             is_running: false,
             local_peer_id: None,
+            listen_addrs: vec![],
         }),
     }
 }
@@ -507,6 +536,7 @@ pub fn run() {
         graph_store,
         branch_store,
         node: Mutex::new(None),
+        listen_addrs: Arc::new(RwLock::new(Vec::new())),
         data_dir,
     };
 

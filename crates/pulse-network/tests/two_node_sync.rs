@@ -20,6 +20,9 @@ async fn two_nodes_exchange_stubs() {
         listen_port: 0,
         bootstrap_peers: vec![],
         data_dir: dir1.path().to_path_buf(),
+        stub_store: None,
+        graph_store: None,
+        branch_store: None,
     })
     .await
     .unwrap();
@@ -39,6 +42,9 @@ async fn two_nodes_exchange_stubs() {
         listen_port: 0,
         bootstrap_peers: vec![node1_addr],
         data_dir: dir2.path().to_path_buf(),
+        stub_store: None,
+        graph_store: None,
+        branch_store: None,
     })
     .await
     .unwrap();
