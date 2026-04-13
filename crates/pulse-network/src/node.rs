@@ -314,6 +314,40 @@ async fn handle_swarm_event(
             info!("Connected to {peer_id}");
             swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
             let _ = event_tx.send(NodeEvent::PeerConnected(peer_id)).await;
+
+            // Republish all local stubs and edges so the new peer gets history
+            let stub_store_clone = stub_store.clone();
+            let graph_store_clone = graph_store.clone();
+            let stubs_topic_clone = stubs_topic.clone();
+            let edges_topic_clone = edges_topic.clone();
+            let gossipsub = &mut swarm.behaviour_mut().gossipsub;
+
+            // Republish stubs
+            let mut republished = 0;
+            for result in stub_store_clone.iter_all() {
+                let (_hash, stub) = match result {
+                    Ok(s) => s,
+                    Err(_) => continue,
+                };
+                if let Ok(stub_bytes) = stub.to_bytes() {
+                    let msg = PulseMessage::NewStub { stub_bytes };
+                    let _ = gossipsub.publish(stubs_topic_clone.clone(), msg.serialize());
+                    republished += 1;
+                }
+            }
+
+            // Republish edges
+            if let Ok(edges) = graph_store_clone.get_all_edges() {
+                for edge in &edges {
+                    let edge_json = serde_json::to_string(edge).unwrap_or_default();
+                    let msg = PulseMessage::EdgeUpdate { edge_json };
+                    let _ = gossipsub.publish(edges_topic_clone.clone(), msg.serialize());
+                }
+            }
+
+            if republished > 0 {
+                info!("Republished {republished} stubs to new peer {peer_id}");
+            }
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
             debug!("Disconnected from {peer_id}");
