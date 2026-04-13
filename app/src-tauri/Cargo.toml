@@ -26,5 +26,6 @@ pulse-store = { path = "../../crates/pulse-store" }
 pulse-graph = { path = "../../crates/pulse-graph" }
 pulse-network = { path = "../../crates/pulse-network" }
 dirs-next = "2"
+tracing = "0.1"
 libp2p = { version = "0.56", features = ["tokio"] }
 

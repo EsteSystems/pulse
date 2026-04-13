@@ -181,6 +181,52 @@ async fn unlock_identity(state: State<'_, AppState>, passphrase: String) -> Resu
     let identity = ks.decrypt(&passphrase).map_err(|e| e.to_string())?;
     let pubkey_hex = hex::encode(identity.public_key_bytes());
     *state.identity.write().await = Some(identity);
+
+    // Auto-start network if previously configured
+    let config_path = state.data_dir.join("network.json");
+    if config_path.exists() {
+        if let Ok(json) = std::fs::read_to_string(&config_path) {
+            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&json) {
+                let peers: Vec<String> = config["bootstrap_peers"]
+                    .as_array()
+                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                    .unwrap_or_default();
+
+                let addrs: Vec<libp2p::Multiaddr> = peers.iter().filter_map(|p| p.parse().ok()).collect();
+                let mut node_lock = state.node.lock().await;
+                if node_lock.is_none() {
+                    match PulseNode::start(NodeConfig {
+                        listen_port: 0,
+                        bootstrap_peers: addrs,
+                        data_dir: state.data_dir.clone(),
+                        stub_store: Some(state.stub_store.clone()),
+                        graph_store: Some(state.graph_store.clone()),
+                        branch_store: Some(state.branch_store.clone()),
+                    }).await {
+                        Ok(mut node) => {
+                            let listen_addrs = state.listen_addrs.clone();
+                            let mut event_rx = std::mem::replace(&mut node.event_rx, tokio::sync::mpsc::channel(256).1);
+                            let (tx, rx) = tokio::sync::mpsc::channel(256);
+                            node.event_rx = rx;
+                            tokio::spawn(async move {
+                                while let Some(event) = event_rx.recv().await {
+                                    if let NodeEvent::Listening(ref addr) = event {
+                                        listen_addrs.write().await.push(addr.to_string());
+                                    }
+                                    let _ = tx.send(event).await;
+                                }
+                            });
+                            *node_lock = Some(node);
+                        }
+                        Err(e) => {
+                            tracing::warn!("Auto-start network failed: {e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(pubkey_hex)
 }
 
@@ -198,6 +244,11 @@ async fn start_network(
     if node_lock.is_some() {
         return Err("Network already running".into());
     }
+
+    // Save bootstrap peers for auto-reconnect
+    let config_path = state.data_dir.join("network.json");
+    let config = serde_json::json!({ "bootstrap_peers": &bootstrap_peers });
+    let _ = std::fs::write(&config_path, serde_json::to_string_pretty(&config).unwrap_or_default());
 
     let peers: Vec<libp2p::Multiaddr> = bootstrap_peers
         .iter()
