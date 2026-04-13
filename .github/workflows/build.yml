@@ -75,5 +75,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: pulse-${{ matrix.target }}
-          path: app/src-tauri/target/release/bundle/
+          path: target/release/bundle/
           if-no-files-found: warn
